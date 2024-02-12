@@ -7,7 +7,8 @@ class Router:
     relations = {}
     sockets = {}
     ports = {}
-
+    forwarding_table = {} #forwarding table of each router that keeps changing
+    
     def __init__(self, asn, connections):
         print("Router at AS %s starting up" % asn)
         self.asn = asn
@@ -18,10 +19,7 @@ class Router:
             self.sockets[neighbor].bind(('localhost', 0))
             self.ports[neighbor] = int(port)
             self.relations[neighbor] = relation
-            
-            # Below sends initial handshake to all neighbouring routers
-            # to let routers know that it is up and running.
-            self.send(neighbor, json.dumps({ "type": "handshake", "src": self.our_addr(neighbor), "dst": neighbor, "msg": {}  }))
+            self.send(neighbor, json.dumps({ "type": "handshake", "src": self.our_addr(neighbor), "dst": neighbor, "msg": {}  })) #send handshake
 
     def our_addr(self, dst):
         quads = list(int(qdn) for qdn in dst.split('.'))
@@ -30,7 +28,69 @@ class Router:
 
     def send(self, network, message):
         self.sockets[network].sendto(message.encode('utf-8'), ('localhost', self.ports[network]))
-
+     
+    #function to handle each main operation: update, data, dump, withdraw, aggregate (only need first 3 for milestone)    
+    def process_message(self, message):
+        msg_type = message.get("type")
+        if msg_type == 'update': #update
+            self.handle_update(message)
+        elif msg_type == 'data': #data
+            self.handle_data(message)
+        else: #dump
+            self.handle_dump(message)
+            
+    def handle_update(self, message):
+        #Parse the update message
+        
+        network = message['msg']['network']
+        netmask = message['msg']['netmask']
+        localpref = message['msg']['localpref']
+        as_path = message['msg']['ASPath']
+        origin = message['msg']['origin']
+        
+        #Store the entry to the forwarding table 
+        
+        self.forwarding_table[network] = {
+            'netmask': netmask,
+            'localpref': localpref,
+            'as_path': as_path,
+            'origin': origin
+        }
+        
+        #Send copy to neighbors 
+        for neighbor, relation in self.relations.items():
+            
+            # If source is customer then update all neighbors 
+            if relation == 'cust':
+                self.send(neighbor, json.dumps({
+                    'type': 'update',
+                    'src': self.our_addr(neighbor),
+                    'dst': neighbor,
+                    'msg': {
+                        'network': network,
+                        'netmask': netmask,
+                        'ASPath': as_path
+                    }
+                }))
+                
+            #If source is peer or provider then only update customers
+            elif relation == 'peer' or relation == 'prov':
+                if origin == 'IGP':
+                    self.send(neighbor, json.dumps({
+                        'type': 'update',
+                        'src': self.our_addr(neighbor),
+                        'dst': neighbor,
+                        'msg': {
+                            'network': network,
+                            'netmask': netmask,
+                            'ASPath': as_path
+                        }
+                    }))
+        
+    # def handle_data(self, message):
+        
+    # def handle_dump(self, message): 
+        
     def run(self):
         while True:
             socks = select.select(self.sockets.values(), [], [], 0.1)[0]
