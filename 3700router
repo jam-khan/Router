@@ -89,7 +89,36 @@ class Router:
                         }
                     }))
         
-    # def handle_data(self, message):
+    def handle_data(self, message):
+        destination = message['dst']
+        
+        # Check if destination network exists in forwarding table
+        if destination in self.forwarding_table:
+            entry = self.forwarding_table[destination]
+            # Check legality of forwarding
+            if self.relations[entry['next_hop']] == 'cust' or self.relations[destination] == 'cust':
+                # Forward data packet to next hop
+                self.send(entry['next_hop'], json.dumps(message))
+            else:
+                # Send "no route" message back to source
+                self.send(message['src'], json.dumps({
+                    'type': 'no route',
+                    'src': self.our_addr(message['src']),
+                    'dst': message['src'],
+                    'msg': {}
+                }))
+        else:
+            # Send "no route" message back to source
+            self.send(message['src'], json.dumps({
+                'type': 'no route',
+                'src': self.our_addr(message['src']),
+                'dst': message['src'],
+                'msg': {}
+            }))
+
+    
+        
+        
         
     # def handle_dump(self, message): 
         
