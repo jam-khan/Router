@@ -40,7 +40,9 @@ class Router:
             self.handle_dump(message)
             
     def handle_update(self, message):
-        #Parse the update message
+        # Parse the update message
+        print(message)
+        message = json.loads(message)
         
         network = message['msg']['network']
         netmask = message['msg']['netmask']
@@ -48,7 +50,7 @@ class Router:
         as_path = message['msg']['ASPath']
         origin = message['msg']['origin']
         
-        #Store the entry to the forwarding table 
+        # Store the entry to the forwarding table 
         
         self.forwarding_table[network] = {
             'netmask': netmask,
@@ -102,6 +104,8 @@ class Router:
                         srcif = sock
                         break
                 msg = k.decode('utf-8')
+                
+                self.handle_update(msg)
 
                 print("Received message '%s' from %s" % (msg, srcif))
         return
