@@ -7,8 +7,9 @@ class Router:
     relations = {}
     sockets = {}
     ports = {}
-    forwarding_table = {} #forwarding table of each router that keeps changing
-    
+    forward_table = {}
+    table_cache = []
+
     def __init__(self, asn, connections):
         print("Router at AS %s starting up" % asn)
         self.asn = asn
@@ -19,7 +20,7 @@ class Router:
             self.sockets[neighbor].bind(('localhost', 0))
             self.ports[neighbor] = int(port)
             self.relations[neighbor] = relation
-            self.send(neighbor, json.dumps({ "type": "handshake", "src": self.our_addr(neighbor), "dst": neighbor, "msg": {}  })) #send handshake
+            self.send(neighbor, json.dumps({ "type": "handshake", "src": self.our_addr(neighbor), "dst": neighbor, "msg": {}  }))
 
     def our_addr(self, dst):
         quads = list(int(qdn) for qdn in dst.split('.'))
@@ -27,101 +28,145 @@ class Router:
         return "%d.%d.%d.%d" % (quads[0], quads[1], quads[2], quads[3])
 
     def send(self, network, message):
+        print("Sent %s", message)
         self.sockets[network].sendto(message.encode('utf-8'), ('localhost', self.ports[network]))
-     
-    #function to handle each main operation: update, data, dump, withdraw, aggregate (only need first 3 for milestone)    
-    def process_message(self, message):
-        msg_type = message.get("type")
-        if msg_type == 'update': #update
-            self.handle_update(message)
-        elif msg_type == 'data': #data
-            self.handle_data(message)
-        else: #dump
-            self.handle_dump(message)
-            
-    def handle_update(self, message):
-        # Parse the update message
-        print(message)
-        message = json.loads(message)
-        
-        network = message['msg']['network']
-        netmask = message['msg']['netmask']
-        localpref = message['msg']['localpref']
-        as_path = message['msg']['ASPath']
-        origin = message['msg']['origin']
-        
-        # Store the entry to the forwarding table 
-        
-        self.forwarding_table[network] = {
-            'netmask': netmask,
-            'localpref': localpref,
-            'as_path': as_path,
-            'origin': origin
-        }
-        
-        #Send copy to neighbors 
-        for neighbor, relation in self.relations.items():
-            
-            # If source is customer then update all neighbors 
-            if relation == 'cust':
-                self.send(neighbor, json.dumps({
-                    'type': 'update',
-                    'src': self.our_addr(neighbor),
-                    'dst': neighbor,
-                    'msg': {
-                        'network': network,
-                        'netmask': netmask,
-                        'ASPath': as_path
-                    }
-                }))
-                
-            #If source is peer or provider then only update customers
-            elif relation == 'peer' or relation == 'prov':
-                if origin == 'IGP':
-                    self.send(neighbor, json.dumps({
-                        'type': 'update',
-                        'src': self.our_addr(neighbor),
-                        'dst': neighbor,
-                        'msg': {
-                            'network': network,
-                            'netmask': netmask,
-                            'ASPath': as_path
-                        }
-                    }))
-        
-    def handle_data(self, message):
-        destination = message['dst']
-        
-        # Check if destination network exists in forwarding table
-        if destination in self.forwarding_table:
-            entry = self.forwarding_table[destination]
-            # Check legality of forwarding
-            if self.relations[entry['next_hop']] == 'cust' or self.relations[destination] == 'cust':
-                # Forward data packet to next hop
-                self.send(entry['next_hop'], json.dumps(message))
-            else:
-                # Send "no route" message back to source
-                self.send(message['src'], json.dumps({
-                    'type': 'no route',
-                    'src': self.our_addr(message['src']),
-                    'dst': message['src'],
-                    'msg': {}
-                }))
-        else:
-            # Send "no route" message back to source
-            self.send(message['src'], json.dumps({
-                'type': 'no route',
-                'src': self.our_addr(message['src']),
-                'dst': message['src'],
-                'msg': {}
-            }))
 
+    def count_consecutive_ones(self, ip_address):
+        ip_parts = ip_address.split('.')
+        
+        binary_parts = []
+        for part in ip_parts:
+            binary_parts.append(bin(int(part))[2:].zfill(8))
+        
+        ip_binary = ''.join(binary_parts)
+        ones = 0
+        
+        # Iterate through each character in the combined binary representation
+        for bit in ip_binary:
+            if bit == '1':
+                ones += 1
+            else:
+                break
+        
+        return ones
+
+    def parse_update(self, json_message):
+        decoded = json_message.copy()
+        network = decoded['msg']['network']
+        netmask = decoded['msg']['netmask']
+        src = decoded['src']
+        as_path = [args.asn]
+        for i in decoded['msg']['ASPath']:
+            as_path.append(i)
+        # the message to be added is just the old one, but we add a 'peer' field
+        # peer = source IP of the router that sent the corresponding update message
+        new_entry = decoded['msg']
+        new_entry['peer'] = src
+        
+        self.forward_table[src] = (network, self.count_consecutive_ones(netmask))
+        
+        self.table_cache.append(new_entry.copy())
+        
+        message_dict = {"msg": {"netmask": netmask, "ASPath": as_path, "network": network},
+                        "src": "placeholder", "dst": "placeholder", "type": "update"}
+        
+        self.forward_message(message_dict, src)
+    
+    def forward_message(self, message, src):
+        flag = 0 if self.relations[src] == 'cust' else 1
+        for sock in self.sockets:
+            if sock != src and (flag == 0 or (flag == 1 and self.relations[sock] == 'cust')):
+                message['src'] = str(sock)[:-1] + '1'
+                message['dst'] = str(sock)
+                self.send(sock, json.dumps(message))
+    
+    def find_ip_address_with_consecutive_ones(self, ones):
+    
+        binary = []
+        i = 0
+        while ones >= 8:
+            binary.append(8)
+            ones -= 8
+        
+        binary.append(ones)
+
+        while len(binary) < 4:
+            binary.append(0)
+        
+        IP = []
+        
+        for b in binary:
+            IP.append(('1' * b) + ('0' * (8 - b)))
+        print(IP)
+        for i in range(len(IP)):
+            x = int(IP[i], 2)
+            IP[i] = f"{x}"
+        
+        return ".".join(IP)
+    
+    def decimal_to_binary(self, decimal_number):
+        # Get the binary representation with '0b' prefix
+        binary_str = bin(decimal_number)
+        # Remove the '0b' prefix
+        binary_str = binary_str[2:]
+        # Ensure the binary string is exactly 8 bits long by padding with zeros if necessary
+        binary_str = binary_str.zfill(8)
+        return binary_str
+    
+    def is_match(self, candidateIP, network, mask: int):
+        
+        candidateIP = [self.decimal_to_bianry(val) for val in candidateIP.split(".")]
+        networkIP = [self.decimal_to_bianry(val) for val in network.split(".")]
+        i = 0
+        while mask >= 8:
+            if candidateIP[i][:8] == networkIP[i][:8]:
+                mask -= 8
+            i += 1
+        return candidateIP[i][:mask] == networkIP[i][:mask]
+    
     
         
+    
+    def handle_data(self, message):
+        src = message['src']
+        dst = message['dst'].split('.')
+        dst = dst[:-1] + ['2']
+        dst = '.'.join(dst)
+        msg = message['msg']
         
+        send_msg = {"src": src, "dst": dst, "type": "data", "msg": msg}
+        self.send(dst, send_msg)
+        return
         
-    # def handle_dump(self, message): 
+        self.send()
+         
+    def handle_dump(self, message):
         
+        self.send(message["src"], json.dumps({"src": message["dst"], "dst": message["src"], "type": "table", "msg": self.table_cache.copy()}))
+        # pass
+    
+    def process_message(self, message):
+        msg_type = message["type"]
+        
+        if msg_type == "handshake":
+            pass
+        
+        if msg_type == "update":
+            self.parse_update(message)
+        
+        if msg_type == "withdraw":
+            pass
+        
+        if msg_type == "data":
+            # self.handle_data(message)
+            pass
+        
+        if msg_type == "dump":
+            # print("DUMP DUMP DUMP DUMP DUMP ", message)
+            self.handle_dump(message)
+            # pass
+            
+    
     def run(self):
         while True:
             socks = select.select(self.sockets.values(), [], [], 0.1)[0]
@@ -133,9 +178,9 @@ class Router:
                         srcif = sock
                         break
                 msg = k.decode('utf-8')
-                
-                self.handle_update(msg)
 
+                self.process_message(json.loads(msg)) # we send message to be dealt with
+                
                 print("Received message '%s' from %s" % (msg, srcif))
         return
 
