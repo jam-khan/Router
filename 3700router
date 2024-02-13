@@ -2,6 +2,65 @@
 
 import argparse, socket, time, json, select, struct, sys, math
 
+
+# Returns binary string of length 32 with
+# specific 1s from left and remaining bits are 0s
+def get_binary_mask(mask):
+    # We assume IPv4 address
+
+    return ('1' * mask) + ('0' * (32 - mask))
+    
+# Takes IP String and returns 32 bit Binary
+def ip_to_binary(ip: str):
+    
+    ip_vals = ip.split('.')
+    ip_bin = [bin(int(x))[2:].zfill(8) for x in ip_vals]
+    
+    return ''.join(ip_bin)
+
+# Takes 2 binary strings and performs
+# and operation and returns result.
+def and_bin_str(bin1, bin2):
+    
+    if len(bin1) != len(bin2):
+        return -1 # error
+    
+    i = 0
+    res = list(bin1)
+    while i < len(bin2):
+        if bin2[i] == '0':
+            res[i] = '0'
+        
+        i += 1
+    
+    return ''.join(res)
+
+# Takes an ip address and returns consecutive ones
+# from left till 0 is detected
+def count_consecutive_ones(ip_address):
+    
+    ip_binary = ip_to_binary(ip_address)
+    ones = 0
+    
+    for bit in ip_binary:
+        if bit == '0':
+            break
+        ones += 1
+    
+    return ones
+
+# gets 2 ip addresses
+# applies mask on both and compares result
+# if same then within network
+def is_within_network(ip, network, mask):
+    
+    mask_bin = get_binary_mask(mask)
+    ip_binary1 = ip_to_binary(ip)
+    ip_binary2 = ip_to_binary(network)
+    
+    return and_bin_str(ip_binary1, mask_bin) == and_bin_str(ip_binary2, mask_bin)
+
+
 class Router:
 
     relations = {}
@@ -28,144 +87,67 @@ class Router:
         return "%d.%d.%d.%d" % (quads[0], quads[1], quads[2], quads[3])
 
     def send(self, network, message):
-        print("Sent %s", message)
         self.sockets[network].sendto(message.encode('utf-8'), ('localhost', self.ports[network]))
 
-    def count_consecutive_ones(self, ip_address):
-        ip_parts = ip_address.split('.')
+    # Handling update message
+    def handle_update(self, json_message):
+        message = json_message.copy()
+        network = message['msg']['network']
+        netmask = message['msg']['netmask']
+        src = message['src']
+        as_path = [self.asn] + message['msg']['ASPath']
         
-        binary_parts = []
-        for part in ip_parts:
-            binary_parts.append(bin(int(part))[2:].zfill(8))
+        msg = message['msg']
+        msg['peer'] = src
         
-        ip_binary = ''.join(binary_parts)
-        ones = 0
+        self.forward_table[src] = (network, count_consecutive_ones(netmask)) 
         
-        # Iterate through each character in the combined binary representation
-        for bit in ip_binary:
-            if bit == '1':
-                ones += 1
-            else:
-                break
+        self.table_cache.append(msg.copy())
         
-        return ones
-
-    def parse_update(self, json_message):
-        decoded = json_message.copy()
-        network = decoded['msg']['network']
-        netmask = decoded['msg']['netmask']
-        src = decoded['src']
-        as_path = [args.asn]
-        for i in decoded['msg']['ASPath']:
-            as_path.append(i)
-        # the message to be added is just the old one, but we add a 'peer' field
-        # peer = source IP of the router that sent the corresponding update message
-        new_entry = decoded['msg']
-        new_entry['peer'] = src
+        new_msg = {"netmask": netmask, "network": network, "ASPath": as_path}
         
-        self.forward_table[src] = (network, self.count_consecutive_ones(netmask))
-        
-        self.table_cache.append(new_entry.copy())
-        
-        message_dict = {"msg": {"netmask": netmask, "ASPath": as_path, "network": network},
-                        "src": "placeholder", "dst": "placeholder", "type": "update"}
-        
-        self.forward_message(message_dict, src)
-    
-    def forward_message(self, message, src):
-        flag = 0 if self.relations[src] == 'cust' else 1
         for sock in self.sockets:
-            if sock != src and (flag == 0 or (flag == 1 and self.relations[sock] == 'cust')):
-                message['src'] = str(sock)[:-1] + '1'
-                message['dst'] = str(sock)
+            if sock != src:
+                message = {
+                    'src': str(sock)[:-1] + '1',
+                    'dst': str(sock),
+                    'type': 'update',
+                    'msg': new_msg
+                }
+                
                 self.send(sock, json.dumps(message))
     
-    def find_ip_address_with_consecutive_ones(self, ones):
-    
-        binary = []
-        i = 0
-        while ones >= 8:
-            binary.append(8)
-            ones -= 8
-        
-        binary.append(ones)
-
-        while len(binary) < 4:
-            binary.append(0)
-        
-        IP = []
-        
-        for b in binary:
-            IP.append(('1' * b) + ('0' * (8 - b)))
-        print(IP)
-        for i in range(len(IP)):
-            x = int(IP[i], 2)
-            IP[i] = f"{x}"
-        
-        return ".".join(IP)
-    
-    def decimal_to_binary(self, decimal_number):
-        # Get the binary representation with '0b' prefix
-        binary_str = bin(decimal_number)
-        # Remove the '0b' prefix
-        binary_str = binary_str[2:]
-        # Ensure the binary string is exactly 8 bits long by padding with zeros if necessary
-        binary_str = binary_str.zfill(8)
-        return binary_str
-    
-    def is_match(self, candidateIP, network, mask: int):
-        
-        candidateIP = [self.decimal_to_bianry(val) for val in candidateIP.split(".")]
-        networkIP = [self.decimal_to_bianry(val) for val in network.split(".")]
-        i = 0
-        while mask >= 8:
-            if candidateIP[i][:8] == networkIP[i][:8]:
-                mask -= 8
-            i += 1
-        return candidateIP[i][:mask] == networkIP[i][:mask]
-    
-    
-        
-    
+    # Handling data message
     def handle_data(self, message):
-        src = message['src']
-        dst = message['dst'].split('.')
-        dst = dst[:-1] + ['2']
-        dst = '.'.join(dst)
+        
+        dst = message['dst']
         msg = message['msg']
         
-        send_msg = {"src": src, "dst": dst, "type": "data", "msg": msg}
-        self.send(dst, send_msg)
-        return
+        for neighbour in self.forward_table:
+            network, mask = self.forward_table[neighbour]
+            if is_within_network(dst, network, mask):
+                self.send(neighbour, 
+                          json.dumps({"src": self.our_addr(neighbour), "dst": dst, "type": "data", "msg": msg}))
+                break
         
-        self.send()
          
     def handle_dump(self, message):
-        
         self.send(message["src"], json.dumps({"src": message["dst"], "dst": message["src"], "type": "table", "msg": self.table_cache.copy()}))
-        # pass
-    
+        
     def process_message(self, message):
         msg_type = message["type"]
         
         if msg_type == "handshake":
             pass
-        
-        if msg_type == "update":
-            self.parse_update(message)
-        
-        if msg_type == "withdraw":
+        elif msg_type == "update":
+            self.handle_update(message)
+        elif msg_type == "withdraw":
             pass
-        
-        if msg_type == "data":
-            # self.handle_data(message)
+        elif msg_type == "data":
+            self.handle_data(message)
             pass
-        
-        if msg_type == "dump":
-            # print("DUMP DUMP DUMP DUMP DUMP ", message)
+        elif msg_type == "dump":
             self.handle_dump(message)
-            # pass
-            
     
     def run(self):
         while True:
@@ -181,7 +163,6 @@ class Router:
 
                 self.process_message(json.loads(msg)) # we send message to be dealt with
                 
-                print("Received message '%s' from %s" % (msg, srcif))
         return
 
 if __name__ == "__main__":
