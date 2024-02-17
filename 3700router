@@ -87,6 +87,7 @@ class Router:
         return "%d.%d.%d.%d" % (quads[0], quads[1], quads[2], quads[3])
 
     def send(self, network, message):
+        print(f"Sent: {message}")
         self.sockets[network].sendto(message.encode('utf-8'), ('localhost', self.ports[network]))
 
     # Handling update message
@@ -100,8 +101,11 @@ class Router:
         msg = message['msg']
         msg['peer'] = src
         
-        self.forward_table[src] = (network, count_consecutive_ones(netmask)) 
+        self.forward_table[src] = self.forward_table.get(src, [])
+        self.forward_table[src].append((network, count_consecutive_ones(netmask)))
+        # One src/port can handle multiple destination networks.
         
+        print("Forwarding table", self.forward_table)
         self.table_cache.append(msg.copy())
         
         new_msg = {"netmask": netmask, "network": network, "ASPath": as_path}
@@ -117,24 +121,37 @@ class Router:
                 
                 self.send(sock, json.dumps(message))
     
-    # Handling data message
-    def handle_data(self, message):
+    def find_route(self, dst):
         
+        for neighbour in self.forward_table:
+            for network, mask in self.forward_table[neighbour]:
+                if is_within_network(dst, network, mask):
+                    return neighbour
+        
+        return -1
+    # Handling data message
+    def handle_data(self, message, srcif):
+        
+        # src = message['src']
         dst = message['dst']
         msg = message['msg']
         
-        for neighbour in self.forward_table:
-            network, mask = self.forward_table[neighbour]
-            if is_within_network(dst, network, mask):
-                self.send(neighbour, 
-                          json.dumps({"src": self.our_addr(neighbour), "dst": dst, "type": "data", "msg": msg}))
-                break
+        nei = self.find_route(dst)
         
-         
+        if nei != -1: 
+            self.send(nei, json.dumps({"src": self.our_addr(nei), "dst": dst, "type": "data", "msg": msg}))
+        
+        # This code needs to be tested.
+        self.send(srcif, json.dumps({
+            "src": self.our_addr(str(srcif)),
+            "dst": str(srcif),
+            "type": "no route",
+            "msg": {}}))
+        
     def handle_dump(self, message):
         self.send(message["src"], json.dumps({"src": message["dst"], "dst": message["src"], "type": "table", "msg": self.table_cache.copy()}))
         
-    def process_message(self, message):
+    def process_message(self, message, srcif):
         msg_type = message["type"]
         
         if msg_type == "handshake":
@@ -142,9 +159,15 @@ class Router:
         elif msg_type == "update":
             self.handle_update(message)
         elif msg_type == "withdraw":
+            
+            # In this case, we need to handle
+            # it in following manner:
+            # 1. Save a copy of the revocation
+            # 2. Remove Dead Entry
+            # 3. Send copies of the revocation to neighbouring routers
             pass
         elif msg_type == "data":
-            self.handle_data(message)
+            self.handle_data(message, srcif)
             pass
         elif msg_type == "dump":
             self.handle_dump(message)
@@ -160,8 +183,10 @@ class Router:
                         srcif = sock
                         break
                 msg = k.decode('utf-8')
+                
+                print(f"Received {msg}")
 
-                self.process_message(json.loads(msg)) # we send message to be dealt with
+                self.process_message(json.loads(msg), srcif) # we send message to be dealt with
                 
         return
 
