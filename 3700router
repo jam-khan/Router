@@ -3,6 +3,13 @@
 import argparse, socket, time, json, select, struct, sys, math
 
 
+def get_ip_value(ip):
+    
+    ip_vals = ip.split('.')
+    ip_vals = [int(ip_val) for ip_val in ip_vals]
+    
+    return sum(ip_vals)
+    
 # Returns binary string of length 32 with
 # specific 1s from left and remaining bits are 0s
 def get_binary_mask(mask):
@@ -61,12 +68,23 @@ def is_within_network(ip, network, mask):
     return and_bin_str(ip_binary1, mask_bin) == and_bin_str(ip_binary2, mask_bin)
 
 
+def equal_attr(msg1, msg2):
+    
+    return  msg1['localpref']   == msg2['localpref']    and\
+            msg1['peer']        == msg2['peer']         and\
+            msg1['origin']      == msg2['origin']       and\
+            msg1['ASPath']      == msg2['ASPath']       and\
+            msg1['origin']      == msg2['origin']
+
+        
+
+
 class Router:
 
     relations = {}
     sockets = {}
     ports = {}
-    forward_table = {}
+    forward_table = []
     table_cache = []
 
     def __init__(self, asn, connections):
@@ -101,12 +119,16 @@ class Router:
         msg = message['msg']
         msg['peer'] = src
         
-        self.forward_table[src] = self.forward_table.get(src, [])
-        self.forward_table[src].append((network, count_consecutive_ones(netmask)))
+        # msg['peer'] = message['src']
+        
+        self.forward_table.append(msg)
+        
+        # self.forward_table[src] = self.forward_table.get(src, [])
+        # self.forward_table[src].append((network, count_consecutive_ones(netmask)))
         # One src/port can handle multiple destination networks.
         
         print("Forwarding table", self.forward_table)
-        self.table_cache.append(msg.copy())
+        # self.table_cache.append(message.copy())
         
         new_msg = {"netmask": netmask, "network": network, "ASPath": as_path}
         
@@ -122,53 +144,220 @@ class Router:
                 self.send(sock, json.dumps(message))
     
     def find_route(self, dst):
+        print("FORWARDING TABLE: ", self.forward_table)
+        all_routes = []
         
-        for neighbour in self.forward_table:
-            for network, mask in self.forward_table[neighbour]:
-                if is_within_network(dst, network, mask):
-                    return neighbour
+        for msg in self.forward_table:
+            network, netmask = msg['network'], msg['netmask']
+            mask = count_consecutive_ones(netmask)
+            
+            if is_within_network(dst, network, mask):
+                all_routes.append(msg)
         
-        return -1
+        no_of_routes = len(all_routes)
+        
+        if no_of_routes == 1:
+            print("SENT HERE 1")
+            return all_routes[0]
+        
+        if no_of_routes == 0:
+            print("SENT HERE 2")
+            return -1
+        
+        
+        potential_routes = all_routes
+        # else, we go forward and do a filter based on netmask
+        mask_lengths = [count_consecutive_ones(route['netmask']) for route in potential_routes]
+        # We will only keep matches with max match.
+        filtered_routes = []
+        for i in range(len(mask_lengths)):
+            if mask_lengths[i] == max(mask_lengths):
+                filtered_routes.append(potential_routes[i])
+        
+        potential_routes = filtered_routes
+        
+        if len(potential_routes) == 1:
+            print("SENT HERE 3")
+            return potential_routes[0]
+        
+        # After filter has been completed for netmask,
+        # we do a filter on localprefs
+        # we get max localpref
+        
+        local_pref = [route['localpref'] for route in potential_routes]
+
+        filtered_routes = []
+        for i in range(len(potential_routes)):
+            if local_pref[i] == max(local_pref):
+                filtered_routes.append(potential_routes[i])
+        
+        potential_routes = filtered_routes
+        if len(potential_routes) == 1:
+            print("SENT HERE 4")
+            return potential_routes[0]
+        
+        # After performing check on localpref, we go forward and do a check
+        # on self origin, where routes with 'True' self origin are preferred.
+        
+        filtered_routes = []
+        for route in potential_routes:
+            if route['selfOrigin']:
+                filtered_routes.append(route)
+        
+        if not filtered_routes:
+            filtered_routes = []
+            for route in potential_routes:
+                if not route['selfOrigin']:
+                    filtered_routes.append(route)
+        
+        if len(filtered_routes) == 1:
+            print("SENT HERE 5")
+            return filtered_routes[0]
+        
+        potential_routes = filtered_routes
+        
+        # Now, we have performed filter on selfOrigin
+        # if still not found a single route, we will
+        # perform a filter on ASPath
+        ASPath_lengths = [len(route['ASPath']) for route in potential_routes]
+        min_path_length = min(ASPath_lengths)
+        
+        filtered_routes = []
+        for i in range(len(potential_routes)):
+            if ASPath_lengths[i] == min_path_length:
+                filtered_routes.append(potential_routes[i])
+        
+        potential_routes = filtered_routes
+        
+        if len(potential_routes) == 1:
+            print("SENT HERE 6")
+            return potential_routes[0]
+        
+        # Now, we have filtered routes with shortest ASPath
+        # If still, we haven't returned, then we will filter
+        # using 'origin'
+        
+        # Correct below filter
+        filtered_routes_IGP = []
+        filtered_routes_EGP = []
+        filtered_routes_UNK = []
+        for route in potential_routes:
+            if route['origin'] == 'IGP':
+                filtered_routes_IGP.append(route)
+            elif route['origin'] == 'EGP':
+                filtered_routes_EGP.append(route)
+            else:
+                filtered_routes_UNK.append(route)
+        
+        filtered_routes = []
+        if len(filtered_routes_IGP) != 0:
+            filtered_routes = filtered_routes_IGP
+        elif len(filtered_routes_EGP) != 0:
+            filtered_routes = filtered_routes_EGP
+        elif len(filtered_routes_UNK) != 0:
+            filtered_routes = filtered_routes_UNK
+            
+        
+        if len(filtered_routes) == 1:
+            return filtered_routes_IGP[0]
+        
+        
+        
+        # If we haven't got it still, then we will just return the minimal
+        # all_routes = [route['peer'] for route in all_routes]
+        filtered_routes.sort(key=lambda x: get_ip_value(x['peer']))
+        # print(all)
+        print("REMAINING ROUTES: ", all_routes)
+        
+        return filtered_routes[0]
+    
+    def forward_message(self, message, src):
+        flag = 0 if self.relations[src] == 'cust' else 1
+        for sock in self.sockets:
+            if sock != src and (flag == 0 or (flag == 1 and self.relations[sock] == 'cust')):
+                message['src'] = str(sock)[:-1] + '1'
+                message['dst'] = str(sock)
+                self.send(sock, json.dumps(message))
+    
+    def handle_withdraw(self, message):
+        
+        decoded = message.copy()
+        src = decoded['src']
+        dst = decoded['dst']
+        
+        if dst != 0:
+            
+            for withdrawn in decoded['msg']:
+                for entry in self.forward_table:
+                    
+                    if entry['network'] == withdrawn['network'] \
+                        and entry['peer'] == src \
+                            and entry['netmask'] == withdrawn['netmask']:
+                                
+                                self.forward_table.remove(entry)
+            
+            self.forward_message(message.copy(), src)
+        
+        self.disaggregate(message.copy())
+    
+        
+    def disaggregate(self, message):
+        
+        self.forward_table = []
+        
+        for withdrawn in message['msg']:
+            for entry in self.table_cache:
+                print("LATEST ENTRY:", entry)
+                if entry['type'] == 'data':
+                    continue
+                if entry['msg']['network'] == withdrawn['network'] \
+                    and entry['msg']['netmask'] == withdrawn['netmask'] \
+                        and entry['msg']['peer'] == message['src']:
+                            self.table_cache.remove(entry)
+        
+        for backup in self.table_cache:
+            # self.parse_update(backup, disaggregate=True)
+            self.forward_table.append(backup['msg'])
+    
     # Handling data message
     def handle_data(self, message, srcif):
         
-        # src = message['src']
+        src = message['src']
         dst = message['dst']
         msg = message['msg']
         
         nei = self.find_route(dst)
         
-        if nei != -1: 
-            self.send(nei, json.dumps({"src": self.our_addr(nei), "dst": dst, "type": "data", "msg": msg}))
+        if nei != -1:
+            router = nei['peer']
+            
+            if self.relations[router] == 'cust' or self.relations[srcif] == 'cust':
+                self.send(router, json.dumps({"src": src, "dst": dst, "type": "data", "msg": msg}))
         
         # This code needs to be tested.
         self.send(srcif, json.dumps({
             "src": self.our_addr(str(srcif)),
-            "dst": str(srcif),
+            "dst": src,
             "type": "no route",
             "msg": {}}))
-        
+            
     def handle_dump(self, message):
-        self.send(message["src"], json.dumps({"src": message["dst"], "dst": message["src"], "type": "table", "msg": self.table_cache.copy()}))
+        self.send(message["src"], json.dumps({"src": message["dst"], "dst": message["src"], "type": "table", "msg": self.forward_table.copy()}))
         
     def process_message(self, message, srcif):
+        
         msg_type = message["type"]
         
         if msg_type == "handshake":
             pass
         elif msg_type == "update":
+            self.table_cache.append(message.copy())
             self.handle_update(message)
         elif msg_type == "withdraw":
-            
-            # In this case, we need to handle
-            # it in following manner:
-            # 1. Save a copy of the revocation
-            # 2. Remove Dead Entry
-            # 3. Send copies of the revocation to neighbouring routers
+            self.handle_withdraw(message)
             pass
         elif msg_type == "data":
             self.handle_data(message, srcif)
-            pass
         elif msg_type == "dump":
             self.handle_dump(message)
     
