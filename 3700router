@@ -2,8 +2,6 @@
 
 import argparse, socket, json, select
 
-#  It simply takes 
-
 def get_ip_value(ip):
     
     ip_vals = ip.split('.')
@@ -11,11 +9,9 @@ def get_ip_value(ip):
     
     return sum(ip_vals)
     
-# Returns binary string of length 32 with
-# specific 1s from left and remaining bits are 0s
+# Returns binary string of length 32 with specific 1s from left and remaining bits are 0s
 def get_binary_mask(mask):
     # We assume IPv4 address
-
     return ('1' * mask) + ('0' * (32 - mask))
     
 # Takes IP String and returns 32 bit Binary
@@ -45,7 +41,6 @@ def bin_to_dec(bin_digit: str):
             total += 2**i
     
     return total
-    
     
 # Takes 2 binary strings and performs
 # and operation and returns result.
@@ -78,8 +73,7 @@ def count_consecutive_ones(ip_address):
     
     return ones
 
-# gets 2 ip addresses
-# applies mask on both and compares result
+# gets 2 ip addresses applies mask on both and compares result
 # if same then within network
 def is_within_network(ip, network, mask):
     
