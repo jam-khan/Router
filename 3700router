@@ -285,7 +285,6 @@ class Router:
     # If takes into ag
     def broadcast(self, message, src):
         
-        
         for sock in self.sockets:
             if sock != src and (self.relations[src] == 'cust' or self.relations[sock] == 'cust'):
                 message['src'] = self.our_addr(str(sock))
