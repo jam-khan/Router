@@ -74,14 +74,6 @@ def binary_to_ip(binary):
         return '.'.join(ip_decimals)
     
 def equal_attr(msg1, msg2):
-    print("Comparing attributes:")
-    print("msg1:", msg1)
-    print("msg2:", msg2)
-    print("localpref:", msg1['localpref'], msg2['localpref'])
-    print("peer:", msg1['peer'], msg2['peer'])
-    print("origin:", msg1['origin'], msg2['origin'])
-    print("ASPath:", msg1['ASPath'], msg2['ASPath'])
-    
     return  msg1['localpref']   == msg2['localpref']    and\
             msg1['peer']        == msg2['peer']         and\
             msg1['origin']      == msg2['origin']       and\
@@ -93,10 +85,6 @@ def numerically_adjacent(current, new):
         #In this example we look at the first 3 octets cuz 24 and see only last one differs (1 vs 0) and rest before are same so they are numerically adjacent
         if len(new) or len(current) == 0:
             return False
-        if (new[:-1] == current[:-1]):
-            print("yes")
-        if (new[-1] != current[-1]):
-            print("yes")
         return (new[:-1] == current[:-1]) and (new[-1] != current[-1])
 
 class Router:
@@ -128,10 +116,14 @@ class Router:
         print(f"Sent: {message}")
         self.sockets[network].sendto(message.encode('utf-8'), ('localhost', self.ports[network]))
         
-    def handle_aggregate(self, new_msg):
-        current_index = 0
-    
-        while current_index < len(self.forward_table):
+    def handle_aggregate(self, new_msg, current_index):
+        # current_index = 0
+        aggragated = False
+        if len(self.forward_table) == 0:
+            self.forward_table.append(new_msg)
+            return
+
+        elif current_index < len(self.forward_table):
             current= self.forward_table[current_index] #the current entry we are looking at
             
             current_network_prefix = ip_to_binary(current['network']) #current network address in binary
@@ -147,21 +139,24 @@ class Router:
             #Check if the new entry can be aggregated with an existing one
             #1) if they have the same attributes    #2) if they are numerically adjacent
             if equal_attr(current, new_msg) and numerically_adjacent(current_network_prefix[:current_mask_length], new_network_prefix[:new_mask_length]):
-                
-                
                 #set the last bit to 0 (in order to make it part of larger network)
                 # new_network_prefix[new_mask_length - 1] = '0'  # Assign '0' as a string
                 new_network_prefix[new_mask_length - 1] = '0'
             
                 new_msg['network'] = binary_to_ip(new_network_prefix) #convert it back to ip address
                 new_msg['netmask'] = count_consecutive_ones(new_mask_length - 1) #reduce the subnet mask by 1
-            
                 
                 self.forward_table.pop(current_index) #remove that currently existing entry because we have aggregate
-            
-            current_index += 1 #iterate to next entry
+                aggragated = True
+                self.handle_aggregate(new_msg, 0)
+                
+                if aggragated == True:
+                    self.handle_aggregate(new_msg.copy(), 0)
+                else:
+                    self.handle_aggregate(new_msg, current_index + 1)
         #looked at all entries to see if we can aggregate and didn't find a possibility
-        self.forward_table.append(new_msg)
+        else:
+            self.forward_table.append(new_msg)
 
     # Handling update message
     def handle_update(self, json_message):
@@ -175,7 +170,7 @@ class Router:
         msg['peer'] = src
         
         # msg['peer'] = message['src']
-        self.handle_aggregate(msg)
+        self.handle_aggregate(msg.copy(), 0)
         
         #self.forward_table.append(msg)
         
@@ -372,7 +367,6 @@ class Router:
                             self.table_cache.remove(entry)
         
         for backup in self.table_cache:
-            # self.parse_update(backup, disaggregate=True)
             self.forward_table.append(backup['msg'])
     
     # Handling data message
