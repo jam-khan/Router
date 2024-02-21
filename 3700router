@@ -400,13 +400,13 @@ class Router:
             if self.relations[router] == 'cust' or self.relations[srcif] == 'cust':
                 self.send(router, json.dumps({"src": src, "dst": dst, "type": "data", "msg": msg}))
         
-        # This code needs to be tested.
-        self.send(srcif, json.dumps({
-            "src": self.our_addr(str(srcif)),
-            "dst": src,
-            "type": "no route",
-            "msg": {}}))
-            
+        else:
+            self.send(srcif, json.dumps({
+                "src": self.our_addr(str(srcif)),
+                "dst": src,
+                "type": "no route",
+                "msg": {}}))
+                
     def handle_dump(self, message):
         self.send(message["src"], json.dumps({"src": message["dst"], "dst": message["src"], "type": "table", "msg": self.forward_table.copy()}))
         
