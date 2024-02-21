@@ -1,7 +1,14 @@
 #!/usr/bin/env -S python3 -u
 
 import argparse, socket, json, select
+
+def get_ip_value(ip):
     
+    ip_vals = ip.split('.')
+    ip_vals = [int(ip_val) for ip_val in ip_vals]
+    
+    return sum(ip_vals)
+
 # Returns binary string of length 32 with specific 1s from left and remaining bits are 0s
 def get_binary_mask(mask):
     # We assume IPv4 address
@@ -77,20 +84,7 @@ def is_within_network(ip, network, mask):
     
     return and_bin_str(ip_binary1, mask_bin) == and_bin_str(ip_binary2, mask_bin)
 
-def prefix_match(ip, network, mask):
-    
-    bin_mask    = get_binary_mask(mask)
-    bin_network = ip_to_binary(network)
-    bin_ip      = ip_to_binary(ip)
-    
-    res = and_bin_str(bin_network, bin_mask)
-    
-    prefix_match = 0
-    for d1, d2 in zip(res, bin_ip):
-        if d1 == d2:
-            prefix_match += 1
-    
-    return prefix_match
+
 
 #converting ip string in binary back to its ip address format  
 def binary_to_ip(binary):
@@ -144,15 +138,6 @@ class Router:
             return -1
         elif no_of_routes == 1:
             return all_routes[0]
-        elif no_of_routes == 2:
-            route1, route2 = all_routes
-            network1, mask1 = route1['network'], count_consecutive_ones(route1['netmask'])
-            network2, mask2 = route2['network'], count_consecutive_ones(route2['netmask'])
-            
-            if prefix_match(dst, network1, mask1) > prefix_match(dst, network2, mask2):
-                return route1
-            else:
-                return route2
         else:  
             
             potential_routes = all_routes
@@ -241,7 +226,8 @@ class Router:
                 filtered_routes = filtered_routes_origin['EGP']
             elif len(filtered_routes_origin['UNK']) != 0:
                 filtered_routes = filtered_routes_origin['UNK']
-                
+            
+            filtered_routes.sort(key= lambda x: get_ip_value(x['peer']))
             return filtered_routes[0]
             
     # Handling update message
@@ -299,6 +285,7 @@ class Router:
     
     def aggregate(self, entry):
         
+        
         i = 0
         while i < len(self.forward_table):
             did_aggregate = False
@@ -338,6 +325,7 @@ class Router:
                 i = 0
             
         self.forward_table.append(entry)
+        
             
         
     def disaggregate(self, message):
@@ -346,6 +334,8 @@ class Router:
         
         for withdrawn in message['msg']:
             for entry in self.record:
+                if entry['type'] == 'data':
+                    continue
                 
                 if entry['msg']['network'] == withdrawn['network'] \
                     and entry['msg']['netmask'] == withdrawn['netmask'] \
@@ -356,6 +346,7 @@ class Router:
             temp = backup['msg']
             temp['peer'] = backup['src']
             self.aggregate(temp.copy())
+            
             
             
     
