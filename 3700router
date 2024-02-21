@@ -253,9 +253,9 @@ class Router:
         self.broadcast(send_msg, src)
     
     def broadcast(self, message, src):
-        flag = 0 if self.relations[src] == 'cust' else 1
         for sock in self.sockets:
-            if sock != src and (flag == 0 or (flag == 1 and self.relations[sock] == 'cust')):
+            if sock != src and \
+                self.relations[src] == 'cust' or self.relations[sock] == 'cust':
                 message['src'] = str(sock)[:-1] + '1'
                 message['dst'] = str(sock)
                 self.send(sock, json.dumps(message))
