@@ -372,9 +372,7 @@ class Router:
         
         for withdrawn in message['msg']:
             for entry in self.record:
-                print("LATEST ENTRY:", entry)
-                if entry['type'] == 'data':
-                    continue
+                
                 if entry['msg']['network'] == withdrawn['network'] \
                     and entry['msg']['netmask'] == withdrawn['netmask'] \
                         and entry['msg']['peer'] == message['src']:
