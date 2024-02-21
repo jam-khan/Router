@@ -25,6 +25,27 @@ def ip_to_binary(ip: str):
     
     return ''.join(ip_bin)
 
+def bin_to_ip(bin_ip):
+    
+    ip = []
+    for i in range(4):
+        ip.append(bin_ip[8*i:8*(i + 1)])
+    
+    return '.'.join([str(bin_to_dec(val)) for val in ip])
+
+def bin_to_dec(bin_digit: str):
+    
+    bin_digit = bin_digit[::-1]
+    
+    total = 0
+    
+    for i in range(len(bin_digit)):
+        if bin_digit[i] == '1':
+            total += 2**i
+    
+    return total
+    
+    
 # Takes 2 binary strings and performs
 # and operation and returns result.
 def and_bin_str(bin1, bin2):
@@ -78,14 +99,15 @@ def equal_attr(msg1, msg2):
             msg1['peer']        == msg2['peer']         and\
             msg1['origin']      == msg2['origin']       and\
             msg1['ASPath']      == msg2['ASPath']       and\
-            msg1['origin']      == msg2['origin']
+            msg1['selfOrigin']  == msg2['selfOrigin']
 
-def numerically_adjacent(current, new):    
-        #up until 2nd last they should be same and last should be different e.g. 192.168.1.0/24 and 192.168.0.0/24
-        #In this example we look at the first 3 octets cuz 24 and see only last one differs (1 vs 0) and rest before are same so they are numerically adjacent
-        if len(new) or len(current) == 0:
-            return False
-        return (new[:-1] == current[:-1]) and (new[-1] != current[-1])
+
+def is_numerically_adjacent(bin1, bin2):
+    if len(bin1) == 0 or len(bin2) == 0:
+        return False
+    
+    return bin1[:-1] == bin2[:-1] and bin1[-1] != bin2[-1]
+
 
 class Router:
 
@@ -166,20 +188,14 @@ class Router:
         src = message['src']
         as_path = [self.asn] + message['msg']['ASPath']
         
+        
         msg = message['msg']
         msg['peer'] = src
         
-        # msg['peer'] = message['src']
-        self.handle_aggregate(msg.copy(), 0)
-        
-        #self.forward_table.append(msg)
-        
-        # self.forward_table[src] = self.forward_table.get(src, [])
-        # self.forward_table[src].append((network, count_consecutive_ones(netmask)))
-        # One src/port can handle multiple destination networks.
+        self.aggregate(msg.copy(), 0)
+        # self.forward_table.append(msg)
         
         print("Forwarding table", self.forward_table)
-        # self.table_cache.append(message.copy())
         
         new_msg = {"netmask": netmask, "network": network, "ASPath": as_path}
         
@@ -191,8 +207,8 @@ class Router:
                     'type': 'update',
                     'msg': new_msg
                 }
-                
-                self.send(sock, json.dumps(message))
+                self.forward_message(message, src)
+                # self.send(sock, json.dumps(message))
     
     def find_route(self, dst):
         print("FORWARDING TABLE: ", self.forward_table)
@@ -322,6 +338,8 @@ class Router:
         
         return filtered_routes[0]
     
+    
+    
     def forward_message(self, message, src):
         flag = 0 if self.relations[src] == 'cust' else 1
         for sock in self.sockets:
@@ -351,6 +369,38 @@ class Router:
         
         self.disaggregate(message.copy())
     
+    def aggregate(self, entry, i):
+        
+        did_aggregate = False
+        if len(self.forward_table) == 0:
+            self.forward_table.append(entry)
+            return
+        elif i < len(self.forward_table):
+            existing = self.forward_table[i]
+            prefix = ip_to_binary(entry['network'])
+            mask = count_consecutive_ones(entry['netmask'])
+            
+            curr_prefix = ip_to_binary(existing['network'])
+            curr_mask = count_consecutive_ones(entry['netmask'])
+            
+            if is_numerically_adjacent(curr_prefix[:curr_mask], prefix[:mask]) \
+                and equal_attr(entry, existing):
+                    print("INSIDE IFFFFFF --------")
+                    prefix = prefix[:mask - 1] + '0' + prefix[mask:]
+                    
+                    entry['network'] = bin_to_ip(prefix)
+                    entry['netmask'] = bin_to_ip(get_binary_mask(mask - 1))
+                    
+                    self.forward_table.pop(i)
+                    did_aggregate = True
+            
+            if did_aggregate:
+                self.aggregate(entry.copy(), 0)
+            else:
+                self.aggregate(entry, i + 1)
+        elif i >= len(self.forward_table):
+            self.forward_table.append(entry)
+            
         
     def disaggregate(self, message):
         
@@ -367,7 +417,12 @@ class Router:
                             self.table_cache.remove(entry)
         
         for backup in self.table_cache:
-            self.forward_table.append(backup['msg'])
+            temp = backup['msg']
+            temp['peer'] = backup['src']
+            self.aggregate(temp.copy(), 0)
+            # self.forward_table.append(backup['msg'])
+            
+            
     
     # Handling data message
     def handle_data(self, message, srcif):
