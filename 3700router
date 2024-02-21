@@ -111,13 +111,6 @@ def binary_to_ip(binary):
         return '.'.join(ip_decimals)
     
 def equal_attr(msg1, msg2):
-    print("Comparing attributes:")
-    print("msg1:", msg1)
-    print("msg2:", msg2)
-    print("localpref:", msg1['localpref'], msg2['localpref'])
-    print("peer:", msg1['peer'], msg2['peer'])
-    print("origin:", msg1['origin'], msg2['origin'])
-    print("ASPath:", msg1['ASPath'], msg2['ASPath'])
     
     return  msg1['localpref']   == msg2['localpref']    and\
             msg1['peer']        == msg2['peer']         and\
@@ -127,10 +120,11 @@ def equal_attr(msg1, msg2):
 
 
 def is_numerically_adjacent(bin1, bin2):
-    if len(bin1) == 0 or len(bin2) == 0:
-        return False
     
-    return bin1[:-1] == bin2[:-1] and bin1[-1] != bin2[-1]
+    return len(bin1) != 0 and \
+                len(bin2) != 0 and \
+                    bin1[:-1] == bin2[:-1] and \
+                        bin1[-1] != bin2[-1]
 
 
 class Router:
