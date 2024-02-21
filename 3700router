@@ -1,7 +1,8 @@
 #!/usr/bin/env -S python3 -u
 
-import argparse, socket, time, json, select, struct, sys, math
+import argparse, socket, json, select
 
+#  It simply takes 
 
 def get_ip_value(ip):
     
@@ -87,6 +88,21 @@ def is_within_network(ip, network, mask):
     ip_binary2 = ip_to_binary(network)
     
     return and_bin_str(ip_binary1, mask_bin) == and_bin_str(ip_binary2, mask_bin)
+
+def prefix_match(ip, network, mask):
+    
+    bin_mask    = get_binary_mask(mask)
+    bin_network = ip_to_binary(network)
+    bin_ip      = ip_to_binary(ip)
+    
+    res = and_bin_str(bin_network, bin_mask)
+    
+    prefix_match = 0
+    for d1, d2 in zip(res, bin_ip):
+        if d1 == d2:
+            prefix_match += 1
+    
+    return prefix_match
 
 #converting ip string in binary back to its ip address format  
 def binary_to_ip(binary):
@@ -232,7 +248,17 @@ class Router:
             print("SENT HERE 2")
             return -1
         
-        
+        if no_of_routes == 2:
+            route1, route2 = all_routes
+            network1, mask1 = route1['network'], count_consecutive_ones(route1['netmask'])
+            network2, mask2 = route2['network'], count_consecutive_ones(route2['netmask'])
+            
+            if prefix_match(dst, network1, mask1) > prefix_match(dst, network2, mask2):
+                return route1
+            else:
+                return route2
+            
+            
         potential_routes = all_routes
         # else, we go forward and do a filter based on netmask
         mask_lengths = [count_consecutive_ones(route['netmask']) for route in potential_routes]
