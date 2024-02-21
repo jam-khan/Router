@@ -245,35 +245,28 @@ class Router:
             return filtered_routes[0]
             
     # Handling update message
-    def handle_update(self, json_message):
-        message = json_message.copy()
+    def handle_update(self, message):
+        
         network = message['msg']['network']
         netmask = message['msg']['netmask']
-        src = message['src']
+        src     = message['src']
         as_path = [self.asn] + message['msg']['ASPath']
-        
         
         msg = message['msg']
         msg['peer'] = src
         
         self.aggregate(msg.copy())
         
-        print("Forwarding table", self.forward_table)
         
-        new_msg = {"netmask": netmask, "network": network, "ASPath": as_path}
+        send_msg = {
+            'src': 'src',
+            'dst': 'dst',
+            'type': 'update',
+            'msg': {"netmask": netmask, "network": network, "ASPath": as_path}}
         
-        for sock in self.sockets:
-            if sock != src:
-                message = {
-                    'src': str(sock)[:-1] + '1',
-                    'dst': str(sock),
-                    'type': 'update',
-                    'msg': new_msg
-                }
-                self.forward_message(message, src)
-                # self.send(sock, json.dumps(message))
+        self.broadcast(send_msg, src)
     
-    def forward_message(self, message, src):
+    def broadcast(self, message, src):
         flag = 0 if self.relations[src] == 'cust' else 1
         for sock in self.sockets:
             if sock != src and (flag == 0 or (flag == 1 and self.relations[sock] == 'cust')):
@@ -299,7 +292,7 @@ class Router:
                                 
                                 self.forward_table.remove(entry)
             
-            self.forward_message(message.copy(), src)
+            self.broadcast(message.copy(), src)
         
         self.disaggregate(message.copy())
     
