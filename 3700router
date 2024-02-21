@@ -349,14 +349,6 @@ class Router:
         if len(filtered_routes) == 1:
             return filtered_routes_IGP[0]
         
-        
-        
-        # If we haven't got it still, then we will just return the minimal
-        # all_routes = [route['peer'] for route in all_routes]
-        filtered_routes.sort(key=lambda x: get_ip_value(x['peer']))
-        # print(all)
-        print("REMAINING ROUTES: ", all_routes)
-        
         return filtered_routes[0]
     
     
