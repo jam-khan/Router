@@ -1,13 +1,6 @@
 #!/usr/bin/env -S python3 -u
 
 import argparse, socket, json, select
-
-def get_ip_value(ip):
-    
-    ip_vals = ip.split('.')
-    ip_vals = [int(ip_val) for ip_val in ip_vals]
-    
-    return sum(ip_vals)
     
 # Returns binary string of length 32 with specific 1s from left and remaining bits are 0s
 def get_binary_mask(mask):
@@ -61,6 +54,7 @@ def and_bin_str(bin1, bin2):
 
 # Takes an ip address and returns consecutive ones
 # from left till 0 is detected
+# It is also used to return mask
 def count_consecutive_ones(ip_address):
     
     ip_binary = ip_to_binary(ip_address)
@@ -131,9 +125,125 @@ class Router:
         return "%d.%d.%d.%d" % (quads[0], quads[1], quads[2], quads[3])
 
     def send(self, network, message):
-        print(f"Sent: {message}")
         self.sockets[network].sendto(message.encode('utf-8'), ('localhost', self.ports[network]))
+    
+    def find_route(self, dst):
+        all_routes = []
         
+        for msg in self.forward_table:
+            network, netmask = msg['network'], msg['netmask']
+            mask = count_consecutive_ones(netmask)
+            
+            if is_within_network(dst, network, mask):
+                all_routes.append(msg)
+        
+        
+        no_of_routes = len(all_routes)
+        
+        if no_of_routes == 0:
+            return -1
+        elif no_of_routes == 1:
+            return all_routes[0]
+        elif no_of_routes == 2:
+            route1, route2 = all_routes
+            network1, mask1 = route1['network'], count_consecutive_ones(route1['netmask'])
+            network2, mask2 = route2['network'], count_consecutive_ones(route2['netmask'])
+            
+            if prefix_match(dst, network1, mask1) > prefix_match(dst, network2, mask2):
+                return route1
+            else:
+                return route2
+        else:  
+            
+            potential_routes = all_routes
+            # else, we go forward and do a filter based on netmask
+            mask_lengths = [count_consecutive_ones(route['netmask']) for route in potential_routes]
+            # We will only keep matches with max match.
+            filtered_routes = []
+            for i in range(len(mask_lengths)):
+                if mask_lengths[i] == max(mask_lengths):
+                    filtered_routes.append(potential_routes[i])
+            
+            potential_routes = filtered_routes
+            
+            if len(potential_routes) == 1:
+                return potential_routes[0]
+            
+            # After filter has been completed for netmask,
+            # we do a filter on localprefs
+            # we get max localpref
+            
+            local_pref = [route['localpref'] for route in potential_routes]
+
+            filtered_routes = []
+            for i in range(len(potential_routes)):
+                if local_pref[i] == max(local_pref):
+                    filtered_routes.append(potential_routes[i])
+            
+            potential_routes = filtered_routes
+            if len(potential_routes) == 1:
+                return potential_routes[0]
+            
+            # After performing check on localpref, we go forward and do a check
+            # on self origin, where routes with 'True' self origin are preferred.
+            
+            filtered_routes = []
+            for route in potential_routes:
+                if route['selfOrigin']:
+                    filtered_routes.append(route)
+            
+            if not filtered_routes:
+                filtered_routes = []
+                for route in potential_routes:
+                    if not route['selfOrigin']:
+                        filtered_routes.append(route)
+            
+            if len(filtered_routes) == 1:
+                return filtered_routes[0]
+            
+            potential_routes = filtered_routes
+            
+            # Now, we have performed filter on selfOrigin
+            # if still not found a single route, we will
+            # perform a filter on ASPath
+            ASPath_lengths = [len(route['ASPath']) for route in potential_routes]
+            min_path_length = min(ASPath_lengths)
+            
+            filtered_routes = []
+            for i in range(len(potential_routes)):
+                if ASPath_lengths[i] == min_path_length:
+                    filtered_routes.append(potential_routes[i])
+            
+            potential_routes = filtered_routes
+            
+            if len(potential_routes) == 1:
+                return potential_routes[0]
+            
+            # Now, we have filtered routes with shortest ASPath
+            # If still, we haven't returned, then we will filter
+            # using 'origin'
+            
+            # Correct below filter
+            filtered_routes_origin = {
+                'IGP': [],
+                'EGP': [],
+                'UNK': []
+            }
+            
+            for route in potential_routes:
+                filtered_routes_origin[route['origin']].append(route)
+            
+            filtered_routes = []
+            
+            if len(filtered_routes_origin['IGP']) != 0:
+                filtered_routes = filtered_routes_origin['IGP']
+            elif len(filtered_routes_origin['EGP']) != 0:
+                filtered_routes = filtered_routes_origin['EGP']
+            elif len(filtered_routes_origin['UNK']) != 0:
+                filtered_routes = filtered_routes_origin['UNK']
+                
+            return filtered_routes[0]
+            
     # Handling update message
     def handle_update(self, json_message):
         message = json_message.copy()
@@ -163,131 +273,6 @@ class Router:
                 self.forward_message(message, src)
                 # self.send(sock, json.dumps(message))
     
-    def find_route(self, dst):
-        all_routes = []
-        
-        for msg in self.forward_table:
-            network, netmask = msg['network'], msg['netmask']
-            mask = count_consecutive_ones(netmask)
-            
-            if is_within_network(dst, network, mask):
-                all_routes.append(msg)
-        
-        no_of_routes = len(all_routes)
-        
-        if no_of_routes == 1:
-            return all_routes[0]
-        
-        if no_of_routes == 0:
-            return -1
-        
-        if no_of_routes == 2:
-            route1, route2 = all_routes
-            network1, mask1 = route1['network'], count_consecutive_ones(route1['netmask'])
-            network2, mask2 = route2['network'], count_consecutive_ones(route2['netmask'])
-            
-            if prefix_match(dst, network1, mask1) > prefix_match(dst, network2, mask2):
-                return route1
-            else:
-                return route2
-            
-            
-        potential_routes = all_routes
-        # else, we go forward and do a filter based on netmask
-        mask_lengths = [count_consecutive_ones(route['netmask']) for route in potential_routes]
-        # We will only keep matches with max match.
-        filtered_routes = []
-        for i in range(len(mask_lengths)):
-            if mask_lengths[i] == max(mask_lengths):
-                filtered_routes.append(potential_routes[i])
-        
-        potential_routes = filtered_routes
-        
-        if len(potential_routes) == 1:
-            return potential_routes[0]
-        
-        # After filter has been completed for netmask,
-        # we do a filter on localprefs
-        # we get max localpref
-        
-        local_pref = [route['localpref'] for route in potential_routes]
-
-        filtered_routes = []
-        for i in range(len(potential_routes)):
-            if local_pref[i] == max(local_pref):
-                filtered_routes.append(potential_routes[i])
-        
-        potential_routes = filtered_routes
-        if len(potential_routes) == 1:
-            return potential_routes[0]
-        
-        # After performing check on localpref, we go forward and do a check
-        # on self origin, where routes with 'True' self origin are preferred.
-        
-        filtered_routes = []
-        for route in potential_routes:
-            if route['selfOrigin']:
-                filtered_routes.append(route)
-        
-        if not filtered_routes:
-            filtered_routes = []
-            for route in potential_routes:
-                if not route['selfOrigin']:
-                    filtered_routes.append(route)
-        
-        if len(filtered_routes) == 1:
-            return filtered_routes[0]
-        
-        potential_routes = filtered_routes
-        
-        # Now, we have performed filter on selfOrigin
-        # if still not found a single route, we will
-        # perform a filter on ASPath
-        ASPath_lengths = [len(route['ASPath']) for route in potential_routes]
-        min_path_length = min(ASPath_lengths)
-        
-        filtered_routes = []
-        for i in range(len(potential_routes)):
-            if ASPath_lengths[i] == min_path_length:
-                filtered_routes.append(potential_routes[i])
-        
-        potential_routes = filtered_routes
-        
-        if len(potential_routes) == 1:
-            return potential_routes[0]
-        
-        # Now, we have filtered routes with shortest ASPath
-        # If still, we haven't returned, then we will filter
-        # using 'origin'
-        
-        # Correct below filter
-        filtered_routes_IGP = []
-        filtered_routes_EGP = []
-        filtered_routes_UNK = []
-        for route in potential_routes:
-            if route['origin'] == 'IGP':
-                filtered_routes_IGP.append(route)
-            elif route['origin'] == 'EGP':
-                filtered_routes_EGP.append(route)
-            else:
-                filtered_routes_UNK.append(route)
-        
-        filtered_routes = []
-        if len(filtered_routes_IGP) != 0:
-            filtered_routes = filtered_routes_IGP
-        elif len(filtered_routes_EGP) != 0:
-            filtered_routes = filtered_routes_EGP
-        elif len(filtered_routes_UNK) != 0:
-            filtered_routes = filtered_routes_UNK
-            
-        
-        if len(filtered_routes) == 1:
-            return filtered_routes_IGP[0]
-        
-        return filtered_routes[0]
-    
-    
-    
     def forward_message(self, message, src):
         flag = 0 if self.relations[src] == 'cust' else 1
         for sock in self.sockets:
@@ -295,6 +280,7 @@ class Router:
                 message['src'] = str(sock)[:-1] + '1'
                 message['dst'] = str(sock)
                 self.send(sock, json.dumps(message))
+    
     
     def handle_withdraw(self, message):
         
@@ -316,6 +302,7 @@ class Router:
             self.forward_message(message.copy(), src)
         
         self.disaggregate(message.copy())
+    
     
     def aggregate(self, entry):
         
@@ -386,10 +373,10 @@ class Router:
         dst = message['dst']
         msg = message['msg']
         
-        nei = self.find_route(dst)
+        route = self.find_route(dst)
         
-        if nei != -1:
-            router = nei['peer']
+        if route != -1:
+            router = route['peer']
             
             if self.relations[router] == 'cust' or self.relations[srcif] == 'cust':
                 self.send(router, json.dumps({"src": src, "dst": dst, "type": "data", "msg": msg}))
@@ -402,15 +389,20 @@ class Router:
                 "msg": {}}))
                 
     def handle_dump(self, message):
-        self.send(message["src"], json.dumps({"src": message["dst"], "dst": message["src"], "type": "table", "msg": self.forward_table.copy()}))
         
+        self.send(message["src"], 
+                  json.dumps({
+                    "src": message["dst"], 
+                    "dst": message["src"], 
+                    "type": "table", 
+                    "msg": self.forward_table.copy()}))
+    
+    
     def process_message(self, message, srcif):
         
         msg_type = message["type"]
         
-        if msg_type == "handshake":
-            pass
-        elif msg_type == "update":
+        if msg_type == "update":
             self.record.append(message.copy())
             self.handle_update(message)
         elif msg_type == "withdraw":
@@ -420,6 +412,8 @@ class Router:
             self.handle_data(message, srcif)
         elif msg_type == "dump":
             self.handle_dump(message)
+            
+        # Else, we ignore!
     
     def run(self):
         while True:
