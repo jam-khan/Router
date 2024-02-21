@@ -156,10 +156,14 @@ class Router:
         print(f"Sent: {message}")
         self.sockets[network].sendto(message.encode('utf-8'), ('localhost', self.ports[network]))
         
-    def handle_aggregate(self, new_msg):
-        current_index = 0
-    
-        while current_index < len(self.forward_table):
+    def handle_aggregate(self, new_msg, current_index):
+        # current_index = 0
+        aggragated = False
+        if len(self.forward_table) == 0:
+            self.forward_table.append(new_msg)
+            return
+
+        elif current_index < len(self.forward_table):
             current= self.forward_table[current_index] #the current entry we are looking at
             
             current_network_prefix = ip_to_binary(current['network']) #current network address in binary
@@ -175,21 +179,24 @@ class Router:
             #Check if the new entry can be aggregated with an existing one
             #1) if they have the same attributes    #2) if they are numerically adjacent
             if equal_attr(current, new_msg) and numerically_adjacent(current_network_prefix[:current_mask_length], new_network_prefix[:new_mask_length]):
-                
-                
                 #set the last bit to 0 (in order to make it part of larger network)
                 # new_network_prefix[new_mask_length - 1] = '0'  # Assign '0' as a string
                 new_network_prefix[new_mask_length - 1] = '0'
             
                 new_msg['network'] = binary_to_ip(new_network_prefix) #convert it back to ip address
                 new_msg['netmask'] = count_consecutive_ones(new_mask_length - 1) #reduce the subnet mask by 1
-            
                 
                 self.forward_table.pop(current_index) #remove that currently existing entry because we have aggregate
-            
-            current_index += 1 #iterate to next entry
+                aggragated = True
+                self.handle_aggregate(new_msg, 0)
+                
+                if aggragated == True:
+                    self.handle_aggregate(new_msg.copy(), 0)
+                else:
+                    self.handle_aggregate(new_msg, current_index + 1)
         #looked at all entries to see if we can aggregate and didn't find a possibility
-        self.forward_table.append(new_msg)
+        else:
+            self.forward_table.append(new_msg)
 
     # Handling update message
     def handle_update(self, json_message):
