@@ -2,6 +2,8 @@
 
 import argparse, socket, json, select
 
+# This is basically used for IP sorting
+# we utilize below function for sorting IP addresses
 def get_ip_value(ip):
     
     ip_vals = ip.split('.')
@@ -22,6 +24,8 @@ def ip_to_binary(ip: str):
     
     return ''.join(ip_bin)
 
+# Below helper function is used to convert an ip address
+# in binary format to IPv4 format and return as a string
 def bin_to_ip(bin_ip):
     
     ip = []
@@ -30,6 +34,9 @@ def bin_to_ip(bin_ip):
     
     return '.'.join([str(bin_to_dec(val)) for val in ip])
 
+
+# Below is a helper function to convert binary values passed as
+# strings to Decimal values
 def bin_to_dec(bin_digit: str):
     
     bin_digit = bin_digit[::-1]
@@ -42,6 +49,7 @@ def bin_to_dec(bin_digit: str):
     
     return total
     
+
 # Takes 2 binary strings and performs
 # and operation and returns result.
 def and_bin_str(bin1, bin2):
@@ -59,6 +67,7 @@ def and_bin_str(bin1, bin2):
     
     return ''.join(res)
 
+
 # Takes an ip address and returns consecutive ones
 # from left till 0 is detected
 # It is also used to return mask
@@ -74,6 +83,7 @@ def count_consecutive_ones(ip_address):
     
     return ones
 
+
 # gets 2 ip addresses applies mask on both and compares result
 # if same then within network
 def is_within_network(ip, network, mask):
@@ -85,8 +95,7 @@ def is_within_network(ip, network, mask):
     return and_bin_str(ip_binary1, mask_bin) == and_bin_str(ip_binary2, mask_bin)
 
 
-
-#converting ip string in binary back to its ip address format  
+# converting ip string in binary back to its ip address format  
 def binary_to_ip(binary):
         ip_chunks = [binary[i:i+8] for i in range(0, len(binary), 8)]
         ip_decimals = [str(int(chunk, 2)) for chunk in ip_chunks]
@@ -98,6 +107,8 @@ class Router:
     relations = {}
     sockets = {}
     ports = {}
+    
+    # we use lists as data structures for forwarding table and record of messages.
     forward_table = []
     record = []
 
@@ -121,25 +132,32 @@ class Router:
     def send(self, network, message):
         self.sockets[network].sendto(message.encode('utf-8'), ('localhost', self.ports[network]))
     
+    # Below is the method to find the best possible route for
+    # destination IP address following the rules provided in the description.
     def find_route(self, dst):
         all_routes = []
         
+        # We first iterate through all message in forwarding table
+        # and get a list of potential routes
         for msg in self.forward_table:
             network, netmask = msg['network'], msg['netmask']
             mask = count_consecutive_ones(netmask)
             
+            # We use helper function to check whether it is within range
+            # or not
             if is_within_network(dst, network, mask):
                 all_routes.append(msg)
         
         
         no_of_routes = len(all_routes)
         
-        if no_of_routes == 0:
+        if no_of_routes == 0: # If no possible routes, then -1 (basically "no route")
             return -1
-        elif no_of_routes == 1:
+        elif no_of_routes == 1: # If only one possible route, then we send it.
             return all_routes[0]
-        else:  
+        else: # Else, we apply filtering
             
+            # Filter 1: Routes with highest netmask/prefix are prioritized
             potential_routes = all_routes
             # else, we go forward and do a filter based on netmask
             mask_lengths = [count_consecutive_ones(route['netmask']) for route in potential_routes]
@@ -149,6 +167,7 @@ class Router:
                 if mask_lengths[i] == max(mask_lengths):
                     filtered_routes.append(potential_routes[i])
             
+            # After applying filter, we check if we have a possible candidate
             potential_routes = filtered_routes
             
             if len(potential_routes) == 1:
@@ -156,7 +175,7 @@ class Router:
             
             # After filter has been completed for netmask,
             # we do a filter on localprefs
-            # we get max localpref
+            # we get max localpref and find routes with max local pref
             
             local_pref = [route['localpref'] for route in potential_routes]
 
@@ -165,50 +184,57 @@ class Router:
                 if local_pref[i] == max(local_pref):
                     filtered_routes.append(potential_routes[i])
             
+            # We apply a check for candidate again.
             potential_routes = filtered_routes
             if len(potential_routes) == 1:
                 return potential_routes[0]
             
+            
             # After performing check on localpref, we go forward and do a check
             # on self origin, where routes with 'True' self origin are preferred.
-            
             filtered_routes = []
             for route in potential_routes:
                 if route['selfOrigin']:
                     filtered_routes.append(route)
             
+            # If we couldn't get any route with 'True' selfOrigin,
+            # then, we make a check for 'False' selfOrigin
             if not filtered_routes:
                 filtered_routes = []
                 for route in potential_routes:
                     if not route['selfOrigin']:
                         filtered_routes.append(route)
             
+            # After performing filter using selfOrigin,
+            # we check if we have a candidate
             if len(filtered_routes) == 1:
                 return filtered_routes[0]
             
+            # If we don't find a single candidate,
+            # then we further perform check on ASPath lengths
             potential_routes = filtered_routes
             
-            # Now, we have performed filter on selfOrigin
-            # if still not found a single route, we will
-            # perform a filter on ASPath
             ASPath_lengths = [len(route['ASPath']) for route in potential_routes]
-            min_path_length = min(ASPath_lengths)
+            min_path_length = min(ASPath_lengths) # Finding routes with minimum ASPath lengths
             
             filtered_routes = []
             for i in range(len(potential_routes)):
                 if ASPath_lengths[i] == min_path_length:
                     filtered_routes.append(potential_routes[i])
             
+            # Routes have been filtered using ASPath
             potential_routes = filtered_routes
             
             if len(potential_routes) == 1:
                 return potential_routes[0]
             
             # Now, we have filtered routes with shortest ASPath
-            # If still, we haven't returned, then we will filter
-            # using 'origin'
+            # If still we haven't returned an candidate, then we 
+            # will filter using 'origin'
             
-            # Correct below filter
+            # We keep track of 'IGP', 'EGP' and 'UNK'
+            # candidates seperately, giving priority
+            # IGP > EGP > UNK
             filtered_routes_origin = {
                 'IGP': [],
                 'EGP': [],
@@ -228,6 +254,9 @@ class Router:
                 filtered_routes = filtered_routes_origin['UNK']
             
             filtered_routes.sort(key= lambda x: get_ip_value(x['peer']))
+            
+            # we sort based on IP sum and then, return values with minimum
+            # IP sum if there are still multiple routes possible after all checks.
             return filtered_routes[0]
             
     # Handling update message
@@ -245,55 +274,54 @@ class Router:
         
         
         send_msg = {
-            'src': 'src',
-            'dst': 'dst',
+            'src': 'src', # placeholder as broadcast will assign src and dest
+            'dst': 'dst', # placeholder ...
             'type': 'update',
             'msg': {"netmask": netmask, "network": network, "ASPath": as_path}}
         
         self.broadcast(send_msg, src)
     
+    # Below method is responsible for broadcasting to all ports
+    # If takes into ag
     def broadcast(self, message, src):
+        
+        
         for sock in self.sockets:
-            if sock != src and \
-                self.relations[src] == 'cust' or self.relations[sock] == 'cust':
-                message['src'] = str(sock)[:-1] + '1'
+            if sock != src and (self.relations[src] == 'cust' or self.relations[sock] == 'cust'):
+                message['src'] = self.our_addr(str(sock))
                 message['dst'] = str(sock)
                 self.send(sock, json.dumps(message))
     
     
     def handle_withdraw(self, message):
         
-        decoded = message.copy()
-        src = decoded['src']
-        dst = decoded['dst']
         
-        if dst != 0:
-            
-            for withdrawn in decoded['msg']:
-                for entry in self.forward_table:
-                    
-                    if entry['network'] == withdrawn['network'] \
-                        and entry['peer'] == src \
-                            and entry['netmask'] == withdrawn['netmask']:
-                                
-                                self.forward_table.remove(entry)
-            
-            self.broadcast(message.copy(), src)
+        for withdrawn in message['msg']:
+            for entry in self.forward_table:
+                
+                if entry['network'] == withdrawn['network'] \
+                    and entry['peer'] == message['src'] \
+                        and entry['netmask'] == withdrawn['netmask']:
+                            
+                            self.forward_table.remove(entry)
         
+        self.broadcast(message.copy(), message['src'])
         self.disaggregate(message.copy())
     
-    
+    # Method for aggregation
     def aggregate(self, entry):
         
-        
         i = 0
+        # Below loop iterates through all entries and performs aggregation
+        # After aggregation, we repeat in order to keep checking for aggregation
+        # when no aggregation is performed, loop will automatically end
         while i < len(self.forward_table):
-            did_aggregate = False
-            existing = self.forward_table[i]
+            
+            curr_entry = self.forward_table[i]
             prefix = ip_to_binary(entry['network'])
             mask = count_consecutive_ones(entry['netmask'])
             
-            curr_prefix = ip_to_binary(existing['network'])
+            curr_prefix = ip_to_binary(curr_entry['network'])
             curr_mask = count_consecutive_ones(entry['netmask'])
             
             bin1, bin2 = curr_prefix[:curr_mask], prefix[:mask]
@@ -303,35 +331,35 @@ class Router:
                                             bin1[:-1] == bin2[:-1] and \
                                                 bin1[-1] != bin2[-1]
             
-            equal_attributes =  entry['localpref']   == existing['localpref']    and\
-                                entry['peer']        == existing['peer']         and\
-                                entry['origin']      == existing['origin']       and\
-                                entry['ASPath']      == existing['ASPath']       and\
-                                entry['selfOrigin']  == existing['selfOrigin']
-                                
-            if is_numerically_adjacent \
-                and equal_attributes:
-                    prefix = prefix[:mask - 1] + '0' + prefix[mask:]
-                    
-                    entry['network'] = bin_to_ip(prefix)
-                    entry['netmask'] = bin_to_ip(get_binary_mask(mask - 1))
-                    
-                    self.forward_table.pop(i)
-                    did_aggregate = True
+            equal_attributes =  entry['localpref']   == curr_entry['localpref']    and\
+                                entry['peer']        == curr_entry['peer']         and\
+                                entry['origin']      == curr_entry['origin']       and\
+                                entry['ASPath']      == curr_entry['ASPath']       and\
+                                entry['selfOrigin']  == curr_entry['selfOrigin']
             
-            if not did_aggregate:
-                i += 1
-            else:
+                          
+            if is_numerically_adjacent and equal_attributes:
+                prefix = prefix[:mask - 1] + '0' + prefix[mask:]
+                
+                entry['network'] = bin_to_ip(prefix)
+                entry['netmask'] = bin_to_ip(get_binary_mask(mask - 1))
+                
+                self.forward_table.pop(i)
                 i = 0
+            else:
+                i += 1
             
+        # After aggregation and removing redundant routes in forward table
+        # we add latest entry to forward table
         self.forward_table.append(entry)
         
-            
-        
+    
+    # Below is the method for disaggregation
     def disaggregate(self, message):
         
         self.forward_table = []
         
+        # we remove all entries that are withdrawn from forwarding table
         for withdrawn in message['msg']:
             for entry in self.record:
                 if entry['type'] == 'data':
@@ -342,14 +370,13 @@ class Router:
                         and entry['msg']['peer'] == message['src']:
                             self.record.remove(entry)
         
+        # then, we rebuild forwarding table from backup
         for backup in self.record:
             temp = backup['msg']
             temp['peer'] = backup['src']
             self.aggregate(temp.copy())
             
             
-            
-    
     # Handling data message
     def handle_data(self, message, srcif):
         
@@ -359,19 +386,20 @@ class Router:
         
         route = self.find_route(dst)
         
-        if route != -1:
+        if route != -1: # this means 'no route'
             router = route['peer']
             
             if self.relations[router] == 'cust' or self.relations[srcif] == 'cust':
                 self.send(router, json.dumps({"src": src, "dst": dst, "type": "data", "msg": msg}))
         
-        else:
+        else: # if 'no route' then we send back 'no route' message
             self.send(srcif, json.dumps({
                 "src": self.our_addr(str(srcif)),
                 "dst": src,
                 "type": "no route",
                 "msg": {}}))
-                
+    
+    # Below function handles dump
     def handle_dump(self, message):
         
         self.send(message["src"], 
@@ -391,7 +419,6 @@ class Router:
             self.handle_update(message)
         elif msg_type == "withdraw":
             self.handle_withdraw(message)
-            pass
         elif msg_type == "data":
             self.handle_data(message, srcif)
         elif msg_type == "dump":
@@ -411,8 +438,6 @@ class Router:
                         break
                 msg = k.decode('utf-8')
                 
-                print(f"Received {msg}")
-
                 self.process_message(json.loads(msg), srcif) # we send message to be dealt with
                 
         return
