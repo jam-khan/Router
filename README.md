@@ -1,5 +1,6 @@
-# cs3700_proj3
-Project 3 Repo for CS3700
+# Router
+
+This project was made as part of coursework for CS3700 at Northeastern University.
 
 # High-Level Approach:
 
